@@ -232,8 +232,13 @@ function lst(L){return L.indexOf("cfg.")===0?S.cfg[L.slice(4)]:S[L]}
 function P(g,k){return sum(S.plan.filter(function(x){return x.g===g&&x.k===k}))+sum(S.sob.filter(function(x){return x.g===g&&x.k===k}))}
 function U(g,k){return sum(S.sal.filter(function(x){return x.g===g&&x.k===k}))}
 function stt(p,u){var so=R(p-u);return !p?{t:u?"sin presupuesto":"sin movimiento",c:"mu",so:so}:so<0?{t:"excedido",c:"or",so:so}:so===0?{t:"agotado",c:"rd",so:so}:{t:"disponible",c:"ok",so:so}}
-function isCardAcct(c){return !!(S.tc&&S.tc.cta&&S.tc.cta===c)}
-function cardSpent(){return R(sum(S.tcm||[]))}
+ function isCardAcct(c){return false}
+ function cardMovements(){
+   var linked=S.sal.filter(function(x){return !!x.tc}).map(function(x){var g=by(S.cfg.gastos,x.g)||{};return {id:x.id,sourceSalId:x.id,n:x.gn||g.n||"Salida",m:Number(x.m)||0,f:x.f||today(),nt:x.nt||"",p:x.p,k:x.k}});
+   var older=(S.tcm||[]).filter(function(x){return !x.sourceSalId||!by(S.sal,x.sourceSalId)});
+   return linked.concat(older)
+ }
+ function cardSpent(){return R(sum(cardMovements()))}
 function cardPaid(){return R(sum(S.tcp||[]))}
 function cardDebt(){return Math.max(0,R(cardSpent()-cardPaid()))}
 function budgetAccounts(){return S.cfg.cuentas.filter(function(c){return !isCardAcct(c.id)})}
@@ -250,8 +255,8 @@ function cardCycleStart(end){var p=isoParts(end),cut=cardCutDay();if(!p||!cut)re
 function cardCycleLabel(end){var start=cardCycleStart(end);return start?"Del "+fd(start)+" al "+fd(end):fd(end)}
 function cardMovementCycle(x){return x.cycleEnd||cardCycleForDate(x.f)}
 function cardPaymentCycleOf(x){return x.cycleEnd||cardPaymentCycle(x.f)}
-function cardCycles(){var d={};(S.tcm||[]).forEach(function(x){var k=cardMovementCycle(x);if(k)d[k]=1});(S.tcp||[]).forEach(function(x){var k=cardPaymentCycleOf(x);if(k)d[k]=1});var cur=cardCycleForDate(today());if(cur)d[cur]=1;return Object.keys(d).sort().reverse()}
-function cardSpentCycle(end){return R(sum((S.tcm||[]).filter(function(x){return cardMovementCycle(x)===end})))}
+ function cardCycles(){var d={};cardMovements().forEach(function(x){var k=cardMovementCycle(x);if(k)d[k]=1});(S.tcp||[]).forEach(function(x){var k=cardPaymentCycleOf(x);if(k)d[k]=1});var cur=cardCycleForDate(today());if(cur)d[cur]=1;return Object.keys(d).sort().reverse()}
+ function cardSpentCycle(end){return R(sum(cardMovements().filter(function(x){return cardMovementCycle(x)===end})))}
 function cardPaidCycle(end){return R(sum((S.tcp||[]).filter(function(x){return cardPaymentCycleOf(x)===end})))}
 function cardPendingCycle(end){return Math.max(0,R(cardSpentCycle(end)-cardPaidCycle(end)))}
 function kOfDate(f){if(!f)return "";var a=String(f).split("-");if(a.length<3)return "";return a[0]+"-"+a[1]+"-"+(+a[2]<=15?1:2)}
@@ -286,14 +291,17 @@ function mig(){
   ["plan","sal","acum","deudas","pagos","pl","tcp","tcm","vc","sob","grupos"].forEach(function(k){S[k]=S[k]||[]});
   S.transfers=S.transfers||[];S.ing=S.ing||{};S.ps=S.ps||{F:0,V:0};S.pin={};S.tc=S.tc||{lim:0};S.ui=S.ui||{st:"esfera",c:{}};S.ui.c=S.ui.c||{};
   if(S.tc.cutDay===undefined)S.tc.cutDay=0;if(S.tc.payDay===undefined)S.tc.payDay=0;if(S.tc.lim===undefined)S.tc.lim=0;
-  /* En versiones antiguas la cuenta de tarjeta se guardaba como retenida. Recuperarla una sola vez. */
-  if(!S.tc.cta){var legacy=S.cfg.cuentas.filter(function(c){return c.r});if(legacy.length===1)S.tc.cta=legacy[0].id;}
+   /* Convertir una sola vez los movimientos ligados a la antigua cuenta de tarjeta a registros desde Salidas. */
+   var oldCard=S.tc.cta||"",legacy=S.cfg.cuentas.filter(function(c){return c.r}),oldCards=legacy.map(function(c){return c.id});if(oldCard&&oldCards.indexOf(oldCard)<0)oldCards.push(oldCard);
   S.cfg.cuentas.forEach(function(c){c.r=false;});
-  if(!S.alwaysSal)S.alwaysSal=S.tc.cta?[S.tc.cta]:[];
+   if(!S.alwaysSal)S.alwaysSal=oldCards.slice();
   S.alwaysSal=S.alwaysSal.filter(function(i){return !isCardAcct(i)});
-  S.tc.importedSalIds=S.tc.importedSalIds||[];
-  S.tcm.forEach(function(x){if(x.sourceSalId&&S.tc.importedSalIds.indexOf(x.sourceSalId)<0)S.tc.importedSalIds.push(x.sourceSalId)});
-  if(S.tc.cta)S.sal.filter(function(x){return x.p===S.tc.cta&&S.tc.importedSalIds.indexOf(x.id)<0}).forEach(function(x){var g=by(S.cfg.gastos,x.g)||{};S.tcm.push({id:id(),sourceSalId:x.id,n:x.gn||g.n||"Compra anterior",m:Number(x.m)||0,f:x.f||today(),nt:x.nt||""});S.tc.importedSalIds.push(x.id)});
+   if(!S.tc.salImportDone){
+     S.tcm.forEach(function(x){if(x.sourceSalId){var source=by(S.sal,x.sourceSalId);if(source)source.tc=true}});
+     if(oldCards.length)S.sal.filter(function(x){return oldCards.indexOf(x.p)>=0}).forEach(function(x){x.tc=true});
+     S.tc.salImportDone=true;
+   }
+   S.tc.cta="";
   S.pl=S.pl.filter(function(x){return by(S.cfg.gastos,x.g)});
   S.cfg.gastos.forEach(function(g){if(!S.pl.some(function(x){return x.g===g.id}))S.pl.push({id:id(),tp:tpOf(g.t),g:g.id,m:0,p:""})});
   S.pl.forEach(function(x){var g=by(S.cfg.gastos,x.g);if(g&&g.t)x.tp=tpOf(g.t)});
@@ -334,9 +342,11 @@ function rm(L,i){var c=L.indexOf("cfg.")===0;
   if(L==="sal"){var x0=by(S.sal,i);if(x0&&x0.sb)S.sob=S.sob.filter(function(y){return y.id!==x0.sb})}
   var nl=lst(L).filter(function(x){return x.id!==i});if(c)S.cfg[L.slice(4)]=nl;else S[L]=nl;
   if(L==="deudas")S.pagos=S.pagos.filter(function(x){return x.d!==i});V.ed="";save();draw()}
-function form(L,x,fl){return '<div class="ef">'+fl.map(function(c){var h='<label>'+c[1]+'</label>';
-  h+=c[2]==="s"?'<select'+ch(L,x.id,c[0])+'>'+op(c[3],x[c[0]],"—")+'</select>':'<input type="'+(c[2]==="n"?'number" inputmode="decimal" step="0.01" min="0':c[2]==="d"?'date':'text')+'" value="'+esc(x[c[0]])+'"'+ch(L,x.id,c[0],c[2]==="n")+'>';return h}).join("")+'<button class="ghost" onclick="rm(\''+L+'\',\''+x.id+'\')">Eliminar</button></div>'}
-function FP(){return [["g","Gasto","s",S.cfg.gastos],["m","Monto","n"],["p","Cuenta","s",budgetAccounts()],["f","Fecha","d"],["nt","Notas","t"]]}
+ function form(L,x,fl){return '<div class="ef">'+fl.map(function(c){var h='<label>'+c[1]+'</label>';
+   if(c[2]==="s")h+='<select'+ch(L,x.id,c[0])+'>'+op(c[3],x[c[0]],"—")+'</select>';
+   else if(c[2]==="b")h+='<input type="checkbox"'+(x[c[0]]?' checked':'')+' onchange="up(\''+L+'\',\''+x.id+'\',\''+c[0]+'\',this.checked)">';
+   else h+='<input type="'+(c[2]==="n"?'number" inputmode="decimal" step="0.01" min="0':c[2]==="d"?'date':'text')+'" value="'+esc(x[c[0]])+'"'+ch(L,x.id,c[0],c[2]==="n")+'>';return h}).join("")+'<button class="ghost" onclick="rm(\''+L+'\',\''+x.id+'\')">Eliminar</button></div>'}
+ function FP(){return [["g","Gasto","s",S.cfg.gastos],["m","Monto","n"],["p","Cuenta","s",budgetAccounts()],["f","Fecha","d"],["nt","Notas","t"],["tc","Registrar también en tarjeta","b"]]}
 function hd(k,t,s,np){return '<div class="hd" onclick="tg(\''+k+'\')"><div><b>'+t+'</b><div class="tag">'+s+'</div></div><span class="hr"><span class="tgb">'+(V.o[k]?"Ocultar ▾":"Ver ▸")+'</span></span></div>'}
 function kv(a,b){return '<div class="kv"><span>'+a+'</span><b>'+b+'</b></div>'}
 function head(){return '<div class="grid"><input type="month" value="'+V.mes+'" onchange="V.mes=this.value||V.mes;V.auto=false;draw()"><select onchange="V.q=+this.value;V.auto=false;draw()"><option value="1"'+(V.q==1?" selected":"")+'>1ª quincena</option><option value="2"'+(V.q==2?" selected":"")+'>2ª quincena</option></select></div>'}
@@ -352,8 +362,8 @@ function salRows(all){var ac={};return S.sal.filter(function(x){return all||x.k=
 function lineS(r){
   var x=r.x,g=by(S.cfg.gastos,x.g)||{n:"(eliminado)"},name=x.gn||g.n;
   return '<div class="item item-editable"><div class="row" onclick="ted(\'sal:'+x.id+'\')" style="cursor:pointer"><b class="'+(x.sob?'or':r.s.c)+'">'+esc(name)+'</b><span class="amt '+(x.sob?'or':isCardAcct(x.p)?'rd':r.s.c)+'">'+f(x.m)+'</span><button class="delete-x '+(x.sob?'or':isCardAcct(x.p)?'rd':r.s.c)+'" title="Eliminar salida" onclick="event.stopPropagation();rm(\'sal\',\''+x.id+'\')">×</button></div>'
-   +'<div class="tag">'+(x.sob?'Salida del sobrante':r.s.t)+' · '+fd(x.f)+' · '+nmx(S.cfg.cuentas,x.p)+(x.sb?' · del sobrante':'')+(x.nt?' · '+esc(x.nt):'')+(V.all?' · '+nom(x.k):'')+'</div>'
-   +(x.sob?'<div class="tag">Sobrante disponible en cuenta: '+f(surplusAcct(x.p))+'</div>':'<div class="tag">Presupuesto '+f(r.p)+' · acumulado '+f(r.a)+' · sobrante '+f(r.s.so)+'</div>')+(V.ed==="sal:"+x.id?(x.sob?form("sal",x,[["gn","Nombre del gasto","t"],["c","Categoría","s",S.cfg.cats],["t","Tipo","s",S.cfg.tipos],["m","Monto","n"],["p","Cuenta","s",budgetAccounts()],["f","Fecha","d"],["nt","Notas","t"]]):form("sal",x,FP())):'')+'</div>'}
+    +'<div class="tag">'+(x.sob?'Salida del sobrante':r.s.t)+' · '+fd(x.f)+' · '+nmx(S.cfg.cuentas,x.p)+(x.sb?' · del sobrante':'')+(x.tc?' · 💳 También en tarjeta':'')+(x.nt?' · '+esc(x.nt):'')+(V.all?' · '+nom(x.k):'')+'</div>'
+    +(x.sob?'<div class="tag">Sobrante disponible en cuenta: '+f(surplusAcct(x.p))+'</div>':'<div class="tag">Presupuesto '+f(r.p)+' · acumulado '+f(r.a)+' · sobrante '+f(r.s.so)+'</div>')+(V.ed==="sal:"+x.id?(x.sob?form("sal",x,[["gn","Nombre del gasto","t"],["c","Categoría","s",S.cfg.cats],["t","Tipo","s",S.cfg.tipos],["m","Monto","n"],["p","Cuenta","s",budgetAccounts()],["f","Fecha","d"],["nt","Notas","t"],["tc","Registrar también en tarjeta","b"]]):form("sal",x,FP())):'')+'</div>'}
 function backPreview(){
   if(!V.sheet)return "";
   if(V.sheet==="p"){
@@ -440,15 +450,16 @@ function sheet(){
   if(V.sheet==="s")h+='<div class="grid"><button class="'+(V.sob?"alt":"")+'" onclick="V.sob=false;draw()">Gasto normal</button><button class="'+(V.sob?"":"alt")+'" onclick="V.sob=true;draw()">Del sobrante</button></div>';
   if(!ok)return h+'<div class="empty">Primero crea '+(sb?'tus cuentas':'tus gastos y cuentas')+' en Ajustes.</div><button style="width:100%" onclick="closeSh();go(\'aju\')">Ir a Ajustes</button></div>';
   if(V.sheet==="p")return h+'<div class="grid"><select id="pg" onchange="onPreG()">'+preOpts()+'</select><input id="pm" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Monto sugerido"></div><div class="grid"><select id="pp" disabled style="opacity:.85">'+op(budgetAccounts(),"","Cuenta…")+'</select><input id="pf" type="date" value="'+today()+'"></div><div class="tag" style="margin-bottom:8px">El monto se sugiere desde Gastos fijos, pero puedes cambiarlo para esta quincena sin alterar ese gasto fijo.</div><div id="pi" class="tag" style="margin-bottom:8px"></div><input id="pn" placeholder="Notas (opcional)" style="margin-bottom:8px"><button style="width:100%" onclick="addP()">Guardar gasto</button></div>';
-  if(sb)return h+'<input id="sbn" list="gl" placeholder="Nombre del gasto" style="margin-bottom:8px"><datalist id="gl">'+c.gastos.map(function(x){return '<option value="'+esc(x.n)+'">'}).join("")+'</datalist><div class="grid"><select id="sbc">'+op(c.cats,"","Categoría…")+'</select><select id="sbt">'+op(c.tipos,"","Tipo…")+'</select></div><div class="grid"><input id="sbm" type="number" inputmode="decimal" step="0.01" placeholder="Monto"><select id="sbp" onchange="onSbp()">'+sbAcctOpts()+'</select></div><div class="grid"><input id="sbf" type="date" value="'+today()+'"><input id="sbo" placeholder="Notas (opcional)"></div><div id="sbi" class="tag" style="margin-bottom:8px"></div><button style="width:100%" onclick="addSb()">Guardar salida del sobrante</button></div>';
-  return h+'<div class="grid"><select id="sg" onchange="onSalG()">'+op(salGastos(),V.salG||"","Gasto…")+'</select><input id="sm" type="number" inputmode="decimal" step="0.01" placeholder="Monto"></div><div class="grid"><select id="sp" onchange="sinfo()">'+salAcctOpts(V.salG||"")+'</select><input id="sf" type="date" value="'+today()+'"></div><input id="sn" placeholder="Notas (opcional)" style="margin-bottom:8px"><div id="si" class="tag" style="margin-bottom:8px"></div><button style="width:100%" onclick="addS()">Guardar salida</button></div>'}
+   if(sb)return h+'<input id="sbn" list="gl" placeholder="Nombre del gasto" style="margin-bottom:8px"><datalist id="gl">'+c.gastos.map(function(x){return '<option value="'+esc(x.n)+'">'}).join("")+'</datalist><div class="grid"><select id="sbc">'+op(c.cats,"","Categoría…")+'</select><select id="sbt">'+op(c.tipos,"","Tipo…")+'</select></div><div class="grid"><input id="sbm" type="number" inputmode="decimal" step="0.01" placeholder="Monto"><select id="sbp" onchange="onSbp()">'+sbAcctOpts()+'</select></div><div class="grid"><input id="sbf" type="date" value="'+today()+'"><input id="sbo" placeholder="Notas (opcional)"></div><label class="chk"><input id="sbtc" type="checkbox"> Registrar también en tarjeta de crédito</label><div id="sbi" class="tag" style="margin-bottom:8px"></div><button style="width:100%" onclick="addSb()">Guardar salida del sobrante</button></div>';
+   return h+'<div class="grid"><select id="sg" onchange="onSalG()">'+op(salGastos(),V.salG||"","Gasto…")+'</select><input id="sm" type="number" inputmode="decimal" step="0.01" placeholder="Monto"></div><div class="grid"><select id="sp" onchange="sinfo()">'+salAcctOpts(V.salG||"")+'</select><input id="sf" type="date" value="'+today()+'"></div><input id="sn" placeholder="Notas (opcional)" style="margin-bottom:8px"><label class="chk"><input id="stc" type="checkbox"> Registrar también en tarjeta de crédito</label><div class="tag" style="margin-bottom:8px">Solo se añadirá a la tarjeta como referencia; la salida se registra una vez en la cuenta elegida.</div><div id="si" class="tag" style="margin-bottom:8px"></div><button style="width:100%" onclick="addS()">Guardar salida</button></div>'}
 function addSb(){
   var n=val("sbn"),m=parseFloat(val("sbm")),p=val("sbp");
   if(!n||!p||!(m>0)){msg("Escribe nombre, monto y cuenta.");return}
   var disp=surplusAcct(p);
   if(m>disp){msg("Saldo de sobrante insuficiente en esa cuenta. Disponible: "+f(disp));return}
   var g=S.cfg.gastos.filter(function(x){return x.n.toLowerCase()===n.toLowerCase()})[0],fe=val("sbf")||today(),nt=val("sbo");
-  S.sal.push({id:id(),g:g?g.id:"",gn:n,c:val("sbc"),t:val("sbt"),m:m,p:p,f:fe,nt:nt,k:key(),sob:true});
+   var card=document.getElementById("sbtc");
+   S.sal.push({id:id(),g:g?g.id:"",gn:n,c:val("sbc"),t:val("sbt"),m:m,p:p,f:fe,nt:nt,k:key(),sob:true,tc:!!(card&&card.checked)});
   save();clr(["sbn","sbc","sbt","sbm","sbp","sbo"]);draw();msg("Salida del sobrante guardada")}
 function sbinfo(){var e=document.getElementById("sbi");if(!e)return;var p=val("sbp"),so=p?surplusAcct(p):0;if(!p&&!S.cfg.cuentas.some(function(c){return surplusAcct(c.id)>0.004})){e.innerHTML='<span class="or">No hay cuentas con sobrante. Distribúyelo primero en Presupuesto.</span>';return}e.innerHTML='Sobrante disponible en la cuenta: <b class="'+(so<0?"or":"ok")+'">'+f(so)+'</b> · solo se permiten salidas hasta ese saldo'}
 function addP(){
@@ -476,7 +487,8 @@ function addS(){
   if(isFixedG(g)){if(R(m)!==rem){msg("Este gasto exige el monto exacto: "+f(rem)+".");return}}
   else if(R(m)>rem){msg("La salida supera el saldo asignado: "+f(rem)+".");return}
   var c=by(S.cfg.cuentas,p),a=c?ac(c):null;if(!a){msg("Selecciona una cuenta válida.");return}if(m>Math.max(0,a.d)+0.004){msg("La cuenta solo tiene "+f(Math.max(0,a.d))+" disponible; no se guardó la salida.");return}
-  S.sal.push({id:id(),g:g,m:R(m),p:p,f:val("sf")||today(),nt:val("sn"),k:key()});save();V.salG="";clr(["sg","sm","sp","sn"]);draw();msg("Salida guardada")}
+   var card=document.getElementById("stc");
+   S.sal.push({id:id(),g:g,m:R(m),p:p,f:val("sf")||today(),nt:val("sn"),k:key(),tc:!!(card&&card.checked)});save();V.salG="";clr(["sg","sm","sp","sn"]);draw();msg("Salida guardada")}
 /* resumen */
 function res(){
   var k=key(),a=S.plan.filter(function(x){return x.k===k}),extra=S.sal.filter(function(x){return x.k===k&&(x.sob||x.sb)}),sl=S.sal.filter(function(x){return x.k===k}),ing=S.ing[k]||0,g=sum(a),so=sobr(k),asg=sum(S.sob.filter(function(x){return x.k===k&&!x.g})),h=head()+'<div class="card"><h2>Resumen de la quincena</h2>'
@@ -556,28 +568,25 @@ function cue(){
   return h+'</div>'+tarjeta()}
 function addA(){var m=parseFloat(val("am")),p=val("ap");if(!val("an")||!p||!(m>0)||isCardAcct(p)){msg("Escribe concepto, monto y una cuenta de presupuesto válida.");return}if(!val("ao")){msg("Anota de dónde salió este dinero.");return}S.acum.push({id:id(),n:val("an"),m:R(m),p:p,f:val("af")||today(),o:val("ao")});save();clr(["an","am","ap","ao"]);draw();msg("Incremento guardado con su origen")}
 /* tarjeta de crédito */
-function setCardAccount(i){S.cfg.cuentas.forEach(function(c){c.r=false});S.tc.cta=i||"";S.alwaysSal=(S.alwaysSal||[]).filter(function(x){return !isCardAcct(x)});save();draw();msg(i?"Cuenta asignada a la tarjeta":"Cuenta de tarjeta desasignada")}
 function setCardDay(k,v){var n=v===""?0:Number(v);if(n!==0&&(!Number.isInteger(n)||n<1||n>31)){msg("El día debe estar entre 1 y 31.");draw();return}S.tc[k]=n;save();draw()}
 function cardCycleView(end){
   var spent=cardSpentCycle(end),paid=cardPaidCycle(end),pending=cardPendingCycle(end),due=cardDueDate(end),status=spent<=0.004?"Sin compras":pending<=0.004?"Pagado":due&&today()>due?"Vencido":due?"Pendiente":"Configura el día de pago",h='<div class="sub"><b>'+cardCycleLabel(end)+'</b><div class="tag">Corte '+fd(end)+' · Pago '+(due?fd(due):"sin configurar")+' · '+status+'</div>'+kv("Compras del corte",f(spent))+kv("Pagos de este corte",f(paid))+kv("Pendiente",f(pending));
-  var mov=(S.tcm||[]).filter(function(x){return cardMovementCycle(x)===end}).slice().sort(function(a,b){return (b.f||"").localeCompare(a.f||"")});
-  h+=mov.length?'<h3>Compras</h3>'+mov.map(function(x){return '<div class="item"><div class="row" onclick="ted(\'tcm:'+x.id+'\')" style="cursor:pointer"><span>'+esc(x.n||"Compra")+' · '+fd(x.f)+'</span><b class="amt">'+f(x.m)+'</b></div>'+(x.nt?'<div class="tag">'+esc(x.nt)+'</div>':'')+(V.ed==="tcm:"+x.id?form("tcm",x,[["n","Compra","t"],["m","Monto","n"],["f","Fecha","d"],["nt","Notas","t"]]):'')+'</div>'}).join(""):'<div class="tag">Sin compras en este corte.</div>';
+   var mov=cardMovements().filter(function(x){return cardMovementCycle(x)===end}).slice().sort(function(a,b){return (b.f||"").localeCompare(a.f||"")});
+   h+=mov.length?'<h3>Gastos con tarjeta</h3>'+mov.map(function(x){var source=x.sourceSalId?by(S.sal,x.sourceSalId):null,edit=source?"sal:"+source.id:"tcm:"+x.id;return '<div class="item"><div class="row" onclick="ted(\''+edit+'\')" style="cursor:pointer"><span>'+esc(x.n||"Compra")+' · '+fd(x.f)+'</span><b class="amt">'+f(x.m)+'</b></div>'+(source?'<div class="tag">Salida desde '+nmx(S.cfg.cuentas,source.p)+' · presupuesto contabilizado una vez</div>':'<div class="tag">Registro anterior de tarjeta</div>')+(x.nt?'<div class="tag">'+esc(x.nt)+'</div>':'')+(V.ed===edit?(source?form("sal",source,FP()):form("tcm",x,[["n","Compra","t"],["m","Monto","n"],["f","Fecha","d"],["nt","Notas","t"]])):'')+'</div>'}).join(""):'<div class="tag">Sin salidas marcadas para tarjeta en este corte.</div>';
   var pays=(S.tcp||[]).filter(function(x){return cardPaymentCycleOf(x)===end}).slice().sort(function(a,b){return (b.f||"").localeCompare(a.f||"")});
   h+=pays.length?'<h3>Pagos registrados</h3>'+pays.map(function(x){return '<div class="item"><div class="row" onclick="ted(\'tp:'+x.id+'\')" style="cursor:pointer"><span>'+fd(x.f)+(x.nt?' · '+esc(x.nt):'')+'</span><b class="amt">'+f(x.m)+'</b></div>'+(V.ed==="tp:"+x.id?form("tcp",x,[["m","Monto","n"],["f","Fecha","d"],["nt","Notas","t"]]):'')+'</div>'}).join(""):"";
   return h+'</div>'
 }
 function cardPayCycleChanged(){var c=val("tpc");V.tpayCycle=c;var m=document.getElementById("tpm"),d=document.getElementById("tpf");if(m)m.value=c?cardPendingCycle(c):"";if(d)d.value=(c&&cardDueDate(c))||today()}
-function tarjeta(){
-  var t=S.tc,vc=vcs(),cycles=cardCycles(),cur=V.tpayCycle&&cycles.indexOf(V.tpayCycle)>=0?V.tpayCycle:(cycles[0]||""),h='<div class="card">'+hd("tj","💳 Tarjeta de crédito",t.cta?'Pendiente <b>'+f(cardDebt())+'</b> · disponible '+f(Math.max(0,(t.lim||0)-cardDebt())):"Selecciona la cuenta donde se asignará el límite");
-  if(!isO("tj"))return h+'</div>';
-  h+='<div class="sub"><label class="lb">Cuenta asignada a la tarjeta de crédito</label><select onchange="setCardAccount(this.value)"><option value="">Seleccionar cuenta…</option>'+op(S.cfg.cuentas,t.cta||"")+'</select><div class="kv"><span>Límite de la tarjeta</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" value="'+t.lim+'" onchange="S.tc.lim=Math.max(0,+this.value||0);save();draw()"></div><div class="grid"><label class="lb">Día de corte<input type="number" inputmode="numeric" min="1" max="31" step="1" value="'+(t.cutDay||"")+'" onchange="setCardDay(\'cutDay\',this.value)"></label><label class="lb">Día de pago<input type="number" inputmode="numeric" min="1" max="31" step="1" value="'+(t.payDay||"")+'" onchange="setCardDay(\'payDay\',this.value)"></label></div><div class="tag">Indica los días del mes. Las compras se agrupan automáticamente desde el día siguiente al corte anterior hasta cada nuevo corte.</div></div>';
-  h+=kv("Compras registradas",f(cardSpent()))+kv("Pagos registrados",f(cardPaid()))+kv("Pendiente total",f(cardDebt()))+kv("Crédito disponible",f(Math.max(0,(t.lim||0)-cardDebt())));
-  if(!t.cta)h+='<div class="tag or">Asigna la cuenta de la tarjeta para empezar a registrar compras y pagos.</div>';
-  h+='<div class="sub"><h2>Registrar compra con tarjeta</h2><div class="tag">Este control es independiente: estas compras no se agregan a Salidas ni cambian el presupuesto o saldo de tus otras cuentas.</div><div class="grid"><input id="tcn" placeholder="Compra o concepto"><input id="tcm" type="number" inputmode="decimal" step="0.01" min="0.01" placeholder="Monto"></div><div class="grid"><input id="tcf" type="date" value="'+today()+'"><input id="tcnt" placeholder="Notas (opcional)"></div><button style="width:100%" onclick="addCardMove()">Guardar compra</button></div>';
-  h+='<div class="sub"><h2>Cortes mensuales</h2>'+(t.cutDay?cycles.map(cardCycleView).join(""):'<div class="empty">Configura el día de corte para ver los totales por ciclo.</div>')+'</div>';
+ function tarjeta(){
+   var t=S.tc,vc=vcs(),cycles=cardCycles(),cur=V.tpayCycle&&cycles.indexOf(V.tpayCycle)>=0?V.tpayCycle:(cycles[0]||""),h='<div class="card">'+hd("tj","💳 Tarjeta de crédito",'Gastado '+f(cardSpent())+' · pendiente '+f(cardDebt()));
+   if(!isO("tj"))return h+'</div>';
+   h+='<div class="sub"><div class="kv"><span>Límite de la tarjeta (opcional)</span><input class="num" type="number" inputmode="decimal" step="0.01" min="0" value="'+t.lim+'" onchange="S.tc.lim=Math.max(0,+this.value||0);save();draw()"></div><div class="kv"><span>Crédito disponible</span><b>'+f(Math.max(0,(t.lim||0)-cardDebt()))+'</b></div><div class="grid"><label class="lb">Día de corte<input type="number" inputmode="numeric" min="1" max="31" step="1" value="'+(t.cutDay||"")+'" onchange="setCardDay(\'cutDay\',this.value)"></label><label class="lb">Día de pago<input type="number" inputmode="numeric" min="1" max="31" step="1" value="'+(t.payDay||"")+'" onchange="setCardDay(\'payDay\',this.value)"></label></div><div class="tag">Las salidas aparecen aquí solo si marcas “Registrar también en tarjeta de crédito”. El gasto se contabiliza una vez en la cuenta que elegiste. Configura los días para agruparlo por corte.</div></div>';
+   h+=kv("Compras registradas",f(cardSpent()))+kv("Pagos registrados",f(cardPaid()))+kv("Pendiente total",f(cardDebt()));
+   h+='<div class="sub"><h2>Cortes mensuales</h2>'+(t.cutDay?cycles.map(cardCycleView).join(""):'<div class="empty">Configura el día de corte para ver los totales por ciclo.</div>')+'</div>';
   h+='<div class="sub"><h2>Registrar pago de un corte</h2>';
   if(t.cutDay&&t.payDay&&cycles.length)h+='<div class="grid"><select id="tpc" onchange="cardPayCycleChanged()">'+cycles.map(function(c){return '<option value="'+c+'"'+(c===cur?' selected':'')+'>'+cardCycleLabel(c)+' · pago '+fd(cardDueDate(c))+'</option>'}).join("")+'</select><input id="tpm" type="number" inputmode="decimal" step="0.01" min="0.01" value="'+(cur?cardPendingCycle(cur):"")+'" placeholder="Monto pagado"></div><div class="grid"><input id="tpf" type="date" value="'+(cur&&cardDueDate(cur)?cardDueDate(cur):today())+'"><input id="tpn" placeholder="Notas (opcional)"></div><div class="grid"><button class="alt" onclick="fillPay()">Usar pendiente del corte</button><button onclick="addTp()">Registrar pago</button></div>'
-  else h+='<div class="tag">Para registrar un pago por corte, asigna primero los días de corte y pago y selecciona una cuenta.</div>';
+   else h+='<div class="tag">Configura los días de corte y pago para registrar un pago por corte.</div>';
   h+='</div>';
   if(vc.r)h+=kv("Visacuotas restantes",f(vc.r))+kv("Cuotas del mes",f(vc.m));
   h+='<div class="sub">'+hd("vcs","Visacuotas",S.vc.length+" · restan "+f(vc.r),true);
@@ -624,8 +633,7 @@ function icCard(){
    +'<label class="cp" style="margin-bottom:8px">Un mismo color para todos<input type="color" value="#2457D6" onchange="allCol(this.value)"></label><button class="ghost" style="width:100%;border:1px solid var(--line)" onclick="resetCol()">Restablecer colores</button>';
   return h+'</div>'}
 function fillPay(){var e=document.getElementById("tpm"),c=val("tpc")||V.tpayCycle;if(e&&c)e.value=cardPendingCycle(c)}
-function addCardMove(){var n=val("tcn"),m=Number(val("tcm")),f0=val("tcf")||today();if(!S.tc.cta){msg("Asigna primero una cuenta a la tarjeta.");return}if(!n||!(m>0)){msg("Escribe el concepto y un monto mayor que 0.");return}S.tcm.push({id:id(),n:n,m:R(m),f:f0,nt:val("tcnt")});save();clr(["tcn","tcm","tcnt"]);draw();msg("Compra registrada solo en el control de la tarjeta")}
-function addTp(){var m=Number(val("tpm")),c=val("tpc")||V.tpayCycle,f0=val("tpf")||today();if(!S.tc.cta){msg("Asigna primero una cuenta a la tarjeta.");return}if(!cardCutDay()||!cardPayDay()){msg("Configura los días de corte y pago.");return}if(!c){msg("Elige el corte que estás pagando.");return}var pending=cardPendingCycle(c);if(!(m>0)){msg("Escribe un monto mayor que 0.");return}if(m>pending+0.004){msg("El pago supera el pendiente de ese corte: "+f(pending)+".");return}S.tcp.push({id:id(),cycleEnd:c,f:f0,m:R(m),nt:val("tpn")});save();V.tpayCycle=c;clr(["tpm","tpn"]);draw();msg("Pago registrado para el corte seleccionado")}
+ function addTp(){var m=Number(val("tpm")),c=val("tpc")||V.tpayCycle,f0=val("tpf")||today();if(!cardCutDay()||!cardPayDay()){msg("Configura los días de corte y pago.");return}if(!c){msg("Elige el corte que estás pagando.");return}var pending=cardPendingCycle(c);if(!(m>0)){msg("Escribe un monto mayor que 0.");return}if(m>pending+0.004){msg("El pago supera el pendiente de ese corte: "+f(pending)+".");return}S.tcp.push({id:id(),cycleEnd:c,f:f0,m:R(m),nt:val("tpn")});save();V.tpayCycle=c;clr(["tpm","tpn"]);draw();msg("Pago registrado para el corte seleccionado")}
 function addVc(){var m=parseFloat(val("vm")),c=parseInt(val("vq"));if(!val("vn")||!(m>0)||!(c>0)){msg("Escribe compra, monto y número de cuotas.");return}S.vc.push({id:id(),n:val("vn"),m:m,c:c,pg:0,f:val("vf")||today()});save();clr(["vn","vm","vq"]);draw();msg("Visacuota agregada")}
 function vcPay(i){var x=by(S.vc,i);if(x&&x.pg<x.c){x.pg++;save();draw()}}
 /* deudas */
@@ -731,7 +739,7 @@ function aju(){
   S.ui=S.ui||{};
   return '<div class="card"><h2>📱 Zoom de pantalla</h2><div class="tag" style="margin-bottom:8px">Evita que la pantalla se amplíe accidentalmente con los dedos.</div><label style="display:flex;align-items:center;gap:10px;padding:8px 0"><input type="checkbox" style="width:22px;height:22px" ' +(S.ui.disableZoom?'checked ':'')+ 'onchange="toggleZoom(this.checked)"><span>Bloquear zoom de la aplicación</span></label><div class="tag">Puedes desactivarlo aquí cuando necesites ampliar el contenido.</div></div>'+themeCard()+'<div class="tag" style="margin-bottom:10px">Lo que agregues, cambies o elimines aquí aparece solo en todas las pantallas.</div>'
    +'<div class="card"><h2>Efectos visuales</h2><label style="display:flex;align-items:center;gap:10px;padding:4px 0"><input type="checkbox" style="width:22px;height:22px" '+(S.ui.disableFade?'checked ':'')+'onchange="toggleFade(this.checked)"><span>Quitar el fondo oscurecido al abrir formularios y las animaciones</span></label></div>'+quickCard()+cl("cats","Categorías")+cl("tipos","Tipos de gasto")+cl("cuentas","Cuentas, métodos de pago y entidades")+asCard()+gr()+cl("ubic","Ubicaciones de deudas")+appIconSettings()+tileSettings()+icCard()
-   +'<div class="card"><h2>Respaldo y exportar</h2><div class="tag" style="margin-bottom:8px">Copia tus datos para guardarlos en Notas. Para Excel, pega los gastos en una hoja.</div><button style="width:100%;margin-bottom:8px" onclick="copyText(JSON.stringify(S),\'Respaldo copiado\')">Copiar respaldo completo</button><button style="width:100%;margin-bottom:12px" onclick="copyTsv()">Copiar gastos para Excel</button><textarea id="rs" placeholder="Pega aquí un respaldo para restaurarlo"></textarea><button class="ghost" style="width:100%;border:1px solid var(--line)" onclick="restaurar()">Restaurar respaldo (reemplaza todo)</button></div><div class="tag" style="text-align:center;margin-top:6px">Versión 19</div>'}
+   +'<div class="card"><h2>Respaldo y exportar</h2><div class="tag" style="margin-bottom:8px">Copia tus datos para guardarlos en Notas. Para Excel, pega los gastos en una hoja.</div><button style="width:100%;margin-bottom:8px" onclick="copyText(JSON.stringify(S),\'Respaldo copiado\')">Copiar respaldo completo</button><button style="width:100%;margin-bottom:12px" onclick="copyTsv()">Copiar gastos para Excel</button><textarea id="rs" placeholder="Pega aquí un respaldo para restaurarlo"></textarea><button class="ghost" style="width:100%;border:1px solid var(--line)" onclick="restaurar()">Restaurar respaldo (reemplaza todo)</button></div><div class="tag" style="text-align:center;margin-top:6px">Versión 20</div>'}
 function toggleFade(enabled){S.ui=S.ui||{};S.ui.disableFade=!!enabled;save();applyFadeSetting();draw()}
 function applyFadeSetting(){document.body.classList.toggle("no-fade",!!(S&&S.ui&&S.ui.disableFade))}
 function toggleZoom(enabled){
